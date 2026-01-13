@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  aidhelper-bot:
+    build: .
+    container_name: aidhelper-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Монтируем директорию с данными для сохранения базы данных
+      - ./data:/app/data
+    environment:
+      - DB_PATH=/app/data/medication.db
