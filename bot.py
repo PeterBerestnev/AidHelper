@@ -392,19 +392,25 @@ async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать историю за последние 7 дней"""
     summary = db.get_medications_summary(days=7)
-    
-    if not summary:
-        await update.message.reply_text("📅 За последние 7 дней не было приемов препарата.")
-        return
+    total_stats = db.get_total_statistics()
     
     message = "📊 История за последние 7 дней:\n\n"
     
-    for date_str, data in summary.items():
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
-        formatted_date = date_obj.strftime("%d.%m.%Y")
-        message += f"📅 {formatted_date}\n"
-        message += f"   • Таблеток: {data['quantity']}\n"
-        message += f"   • Общая дозировка: {data['total_dosage_mg']} мг\n\n"
+    if not summary:
+        message += "❌ За последние 7 дней не было приемов препарата.\n\n"
+    else:
+        for date_str, data in summary.items():
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            formatted_date = date_obj.strftime("%d.%m.%Y")
+            message += f"📅 {formatted_date}\n"
+            message += f"   • Таблеток: {data['quantity']}\n"
+            message += f"   • Общая дозировка: {data['total_dosage_mg']} мг\n\n"
+    
+    # Добавляем общую статистику
+    message += "📈 Общая статистика за все время:\n"
+    message += f"   • Дней с приемом: {total_stats['total_days']}\n"
+    message += f"   • Всего принято таблеток: {total_stats['total_quantity']}\n"
+    message += f"   • Общая дозировка: {total_stats['total_dosage_mg']:.1f} мг"
     
     await update.message.reply_text(message)
 

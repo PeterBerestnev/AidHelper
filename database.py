@@ -147,6 +147,36 @@ class Database:
         
         return summary
 
+    def get_total_statistics(self) -> dict:
+        """Получить общую статистику за все время"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Получаем общее количество дней с приемами и общее количество таблеток
+        cursor.execute("""
+            SELECT 
+                COUNT(DISTINCT date) as total_days,
+                SUM(quantity) as total_quantity,
+                SUM(quantity * dosage_mg) as total_dosage_mg
+            FROM medication_log
+        """)
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0] is not None:
+            return {
+                'total_days': result[0],
+                'total_quantity': result[1] or 0,
+                'total_dosage_mg': result[2] or 0
+            }
+        else:
+            return {
+                'total_days': 0,
+                'total_quantity': 0,
+                'total_dosage_mg': 0
+            }
+
     def add_reminder(self, time_str: str) -> bool:
         """Добавить напоминание"""
         try:
