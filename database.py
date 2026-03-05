@@ -22,6 +22,17 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Таблица препаратов
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS medications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1
+            )
+        """)
+        
         # Таблица для хранения информации о приемах
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS medication_log (
@@ -30,7 +41,8 @@ class Database:
                 time TEXT NOT NULL,
                 quantity INTEGER NOT NULL,
                 dosage_mg REAL NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                medication_id INTEGER DEFAULT 1
             )
         """)
         
@@ -40,7 +52,8 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 time TEXT NOT NULL,
                 enabled INTEGER DEFAULT 1,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                medication_id INTEGER DEFAULT 1
             )
         """)
         
@@ -54,29 +67,91 @@ class Database:
                 end_date TEXT,
                 is_active INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                medication_id INTEGER DEFAULT 1
             )
         """)
+        
+        # Миграция: добавляем колонку medication_id в таблицы, если её ещё нет
+        try:
+            cursor.execute(
+                "ALTER TABLE medication_log ADD COLUMN medication_id INTEGER DEFAULT 1"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
+        
+        try:
+            cursor.execute(
+                "ALTER TABLE reminders ADD COLUMN medication_id INTEGER DEFAULT 1"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
+        
+        try:
+            cursor.execute(
+                "ALTER TABLE course_settings ADD COLUMN medication_id INTEGER DEFAULT 1"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
+        
+        # Сид: создаём препарат «Акнекутан» по умолчанию, если ещё не создан
+        now = datetime.now().isoformat()
+        cursor.execute(
+            "SELECT id FROM medications WHERE name = ?",
+            ("Акнекутан",),
+        )
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                """
+                INSERT INTO medications (name, description, created_at, is_active)
+                VALUES (?, ?, ?, 1)
+                """,
+                ("Акнекутан", "Препарат по умолчанию", now),
+            )
+            default_medication_id = cursor.lastrowid
+        else:
+            default_medication_id = row[0]
+        
+        # Проставляем medication_id по умолчанию там, где он NULL
+        cursor.execute(
+            "UPDATE medication_log SET medication_id = ? WHERE medication_id IS NULL",
+            (default_medication_id,),
+        )
+        cursor.execute(
+            "UPDATE reminders SET medication_id = ? WHERE medication_id IS NULL",
+            (default_medication_id,),
+        )
+        cursor.execute(
+            "UPDATE course_settings SET medication_id = ? WHERE medication_id IS NULL",
+            (default_medication_id,),
+        )
         
         conn.commit()
         conn.close()
 
-    def add_medication(self, quantity: int, dosage_mg: float) -> bool:
-        """Добавить запись о приеме препарата"""
+    def add_medication(
+        self, quantity: int, dosage_mg: float, medication_id: int = 1
+    ) -> bool:
+        """Добавить запись о приеме препарата для конкретного препарата"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             now = datetime.now()
             
             cursor.execute("""
-                INSERT INTO medication_log (date, time, quantity, dosage_mg, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO medication_log (date, time, quantity, dosage_mg, created_at, medication_id)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 now.strftime("%Y-%m-%d"),
                 now.strftime("%H:%M:%S"),
                 quantity,
                 dosage_mg,
-                now.isoformat()
+                now.isoformat(),
+                medication_id
             ))
             
             conn.commit()
@@ -86,8 +161,8 @@ class Database:
             print(f"Ошибка при добавлении записи: {e}")
             return False
 
-    def get_today_medications(self) -> List[Tuple]:
-        """Получить все приемы за сегодня"""
+    def get_today_medications(self, medication_id: int = 1) -> List[Tuple]:
+        """Получить все приемы за сегодня для конкретного препарата"""
         conn = self.get_connection()
         cursor = conn.cursor()
         today = date.today().strftime("%Y-%m-%d")
@@ -95,16 +170,18 @@ class Database:
         cursor.execute("""
             SELECT time, quantity, dosage_mg
             FROM medication_log
-            WHERE date = ?
+            WHERE date = ? AND medication_id = ?
             ORDER BY time
-        """, (today,))
+        """, (today, medication_id))
         
         results = cursor.fetchall()
         conn.close()
         return results
 
-    def get_medications_by_date(self, target_date: date) -> List[Tuple]:
-        """Получить все приемы за указанную дату"""
+    def get_medications_by_date(
+        self, target_date: date, medication_id: int = 1
+    ) -> List[Tuple]:
+        """Получить все приемы за указанную дату для конкретного препарата"""
         conn = self.get_connection()
         cursor = conn.cursor()
         date_str = target_date.strftime("%Y-%m-%d")
@@ -112,16 +189,16 @@ class Database:
         cursor.execute("""
             SELECT time, quantity, dosage_mg
             FROM medication_log
-            WHERE date = ?
+            WHERE date = ? AND medication_id = ?
             ORDER BY time
-        """, (date_str,))
+        """, (date_str, medication_id))
         
         results = cursor.fetchall()
         conn.close()
         return results
 
-    def get_medications_summary(self, days: int = 7) -> dict:
-        """Получить сводку за последние N дней"""
+    def get_medications_summary(self, days: int = 7, medication_id: int = 1) -> dict:
+        """Получить сводку за последние N дней для конкретного препарата"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
@@ -131,9 +208,10 @@ class Database:
                    SUM(quantity * dosage_mg) as total_dosage_mg
             FROM medication_log
             WHERE date >= date('now', '-' || ? || ' days')
+              AND medication_id = ?
             GROUP BY date
             ORDER BY date DESC
-        """, (days,))
+        """, (days, medication_id))
         
         results = cursor.fetchall()
         conn.close()
@@ -147,47 +225,17 @@ class Database:
         
         return summary
 
-    def get_total_statistics(self) -> dict:
-        """Получить общую статистику за все время"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Получаем общее количество дней с приемами и общее количество таблеток
-        cursor.execute("""
-            SELECT 
-                COUNT(DISTINCT date) as total_days,
-                SUM(quantity) as total_quantity,
-                SUM(quantity * dosage_mg) as total_dosage_mg
-            FROM medication_log
-        """)
-        
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result and result[0] is not None:
-            return {
-                'total_days': result[0],
-                'total_quantity': result[1] or 0,
-                'total_dosage_mg': result[2] or 0
-            }
-        else:
-            return {
-                'total_days': 0,
-                'total_quantity': 0,
-                'total_dosage_mg': 0
-            }
-
-    def add_reminder(self, time_str: str) -> bool:
-        """Добавить напоминание"""
+    def add_reminder(self, time_str: str, medication_id: int = 1) -> bool:
+        """Добавить напоминание для конкретного препарата"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             now = datetime.now()
             
             cursor.execute("""
-                INSERT INTO reminders (time, enabled, created_at)
-                VALUES (?, 1, ?)
-            """, (time_str, now.isoformat()))
+                INSERT INTO reminders (time, enabled, created_at, medication_id)
+                VALUES (?, 1, ?, ?)
+            """, (time_str, now.isoformat(), medication_id))
             
             conn.commit()
             conn.close()
@@ -196,17 +244,29 @@ class Database:
             print(f"Ошибка при добавлении напоминания: {e}")
             return False
 
-    def get_reminders(self) -> List[Tuple]:
-        """Получить все активные напоминания"""
+    def get_reminders(self, medication_id: Optional[int] = None) -> List[Tuple]:
+        """Получить все активные напоминания.
+
+        Если medication_id указан, возвращает напоминания только для этого препарата.
+        Возвращает список кортежей (id, time, medication_id).
+        """
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT id, time
-            FROM reminders
-            WHERE enabled = 1
-            ORDER BY time
-        """)
+        if medication_id is not None:
+            cursor.execute("""
+                SELECT id, time, medication_id
+                FROM reminders
+                WHERE enabled = 1 AND medication_id = ?
+                ORDER BY time
+            """, (medication_id,))
+        else:
+            cursor.execute("""
+                SELECT id, time, medication_id
+                FROM reminders
+                WHERE enabled = 1
+                ORDER BY time
+            """)
         
         results = cursor.fetchall()
         conn.close()
@@ -230,8 +290,10 @@ class Database:
             print(f"Ошибка при удалении напоминания: {e}")
             return False
 
-    def get_all_medications(self, days: int = None) -> List[Tuple]:
-        """Получить все записи о приеме препарата"""
+    def get_all_medications(
+        self, days: int = None, medication_id: int = 1
+    ) -> List[Tuple]:
+        """Получить все записи о приеме препарата для конкретного препарата"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
@@ -240,24 +302,28 @@ class Database:
                 SELECT date, time, quantity, dosage_mg, created_at
                 FROM medication_log
                 WHERE date >= date('now', '-' || ? || ' days')
+                  AND medication_id = ?
                 ORDER BY date DESC, time DESC
-            """, (days,))
+            """, (days, medication_id))
         else:
             cursor.execute("""
                 SELECT date, time, quantity, dosage_mg, created_at
                 FROM medication_log
+                WHERE medication_id = ?
                 ORDER BY date DESC, time DESC
-            """)
+            """, (medication_id,))
         
         results = cursor.fetchall()
         conn.close()
         return results
 
-    def generate_statistics_csv(self, file_path: str, days: int = 30) -> bool:
-        """Генерировать CSV файл со статистикой"""
+    def generate_statistics_csv(
+        self, file_path: str, days: int = 30, medication_id: int = 1
+    ) -> bool:
+        """Генерировать CSV файл со статистикой для конкретного препарата"""
         try:
             import csv
-            medications = self.get_all_medications(days=days)
+            medications = self.get_all_medications(days=days, medication_id=medication_id)
             
             with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
@@ -280,8 +346,15 @@ class Database:
             print(f"Ошибка при генерации CSV: {e}")
             return False
 
-    def set_course_settings(self, daily_quantity: int, dosage_mg: float, start_date: str = None, end_date: str = None) -> bool:
-        """Установить настройки курса"""
+    def set_course_settings(
+        self,
+        daily_quantity: int,
+        dosage_mg: float,
+        start_date: str = None,
+        end_date: str = None,
+        medication_id: int = 1,
+    ) -> bool:
+        """Установить настройки курса для конкретного препарата"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -291,8 +364,8 @@ class Database:
             cursor.execute("""
                 UPDATE course_settings
                 SET is_active = 0
-                WHERE is_active = 1
-            """)
+                WHERE is_active = 1 AND medication_id = ?
+            """, (medication_id,))
             
             # Если дата начала не указана, используем сегодня
             if start_date is None:
@@ -300,9 +373,9 @@ class Database:
             
             # Добавляем новые настройки
             cursor.execute("""
-                INSERT INTO course_settings (daily_quantity, dosage_mg, start_date, end_date, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
-            """, (daily_quantity, dosage_mg, start_date, end_date, now.isoformat(), now.isoformat()))
+                INSERT INTO course_settings (daily_quantity, dosage_mg, start_date, end_date, is_active, created_at, updated_at, medication_id)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            """, (daily_quantity, dosage_mg, start_date, end_date, now.isoformat(), now.isoformat(), medication_id))
             
             conn.commit()
             conn.close()
@@ -311,26 +384,26 @@ class Database:
             print(f"Ошибка при установке настроек курса: {e}")
             return False
 
-    def get_active_course_settings(self) -> Optional[Tuple]:
-        """Получить активные настройки курса"""
+    def get_active_course_settings(self, medication_id: int = 1) -> Optional[Tuple]:
+        """Получить активные настройки курса для конкретного препарата"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
             SELECT id, daily_quantity, dosage_mg, start_date, end_date, created_at
             FROM course_settings
-            WHERE is_active = 1
+            WHERE is_active = 1 AND medication_id = ?
             ORDER BY created_at DESC
             LIMIT 1
-        """)
+        """, (medication_id,))
         
         result = cursor.fetchone()
         conn.close()
         return result
 
-    def get_course_progress(self) -> dict:
-        """Получить прогресс курса"""
-        settings = self.get_active_course_settings()
+    def get_course_progress(self, medication_id: int = 1) -> dict:
+        """Получить прогресс курса для конкретного препарата"""
+        settings = self.get_active_course_settings(medication_id=medication_id)
         if not settings:
             return None
         
@@ -357,10 +430,10 @@ class Database:
                    SUM(quantity) as total_quantity,
                    SUM(quantity * dosage_mg) as total_dosage_mg
             FROM medication_log
-            WHERE date >= ? AND date <= ?
+            WHERE date >= ? AND date <= ? AND medication_id = ?
             GROUP BY date
             ORDER BY date
-        """, (start_date_str, today.strftime("%Y-%m-%d")))
+        """, (start_date_str, today.strftime("%Y-%m-%d"), medication_id))
         
         daily_stats = cursor.fetchall()
         conn.close()
@@ -388,3 +461,88 @@ class Database:
             'days_with_medication': days_with_medication,
             'completion_percentage': (total_taken_quantity / total_planned_quantity * 100) if total_planned_quantity > 0 else 0
         }
+
+    # ---------- Методы работы с сущностью "препарат" ----------
+
+    def create_medication(self, name: str, description: Optional[str] = None) -> Optional[int]:
+        """Создать новый препарат и вернуть его id"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            now = datetime.now().isoformat()
+            cursor.execute(
+                """
+                INSERT INTO medications (name, description, created_at, is_active)
+                VALUES (?, ?, ?, 1)
+                """,
+                (name, description, now),
+            )
+            med_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            return med_id
+        except Exception as e:
+            print(f"Ошибка при создании препарата: {e}")
+            return None
+
+    def get_medications(self) -> List[Tuple]:
+        """Получить список активных препаратов"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, name, description
+            FROM medications
+            WHERE is_active = 1
+            ORDER BY id
+            """
+        )
+        meds = cursor.fetchall()
+        conn.close()
+        return meds
+
+    def get_medication(self, medication_id: int) -> Optional[Tuple]:
+        """Получить информацию о конкретном препарате"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, name, description
+            FROM medications
+            WHERE id = ? AND is_active = 1
+            """,
+            (medication_id,),
+        )
+        med = cursor.fetchone()
+        conn.close()
+        return med
+
+    def get_total_statistics(self, medication_id: int = 1) -> dict:
+        """Получить общую статистику за все время по конкретному препарату"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                COUNT(DISTINCT date) as total_days,
+                SUM(quantity) as total_quantity,
+                SUM(quantity * dosage_mg) as total_dosage_mg
+            FROM medication_log
+            WHERE medication_id = ?
+        """, (medication_id,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0] is not None:
+            return {
+                'total_days': result[0],
+                'total_quantity': result[1] or 0,
+                'total_dosage_mg': result[2] or 0
+            }
+        else:
+            return {
+                'total_days': 0,
+                'total_quantity': 0,
+                'total_dosage_mg': 0
+            }

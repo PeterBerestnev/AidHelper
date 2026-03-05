@@ -30,6 +30,18 @@ db = Database()
 
 # Глобальные переменные для хранения состояния
 user_states = {}
+# Текущий выбранный препарат для каждого пользователя (по умолчанию id=1 — Акнекутан)
+user_current_medication: dict[int, int] = {}
+
+
+def get_user_medication(user_id: int) -> int:
+    """Получить текущий выбранный препарат пользователя (по умолчанию 1)."""
+    return user_current_medication.get(user_id, 1)
+
+
+def set_user_medication(user_id: int, medication_id: int) -> None:
+    """Установить текущий препарат пользователя."""
+    user_current_medication[user_id] = medication_id
 
 
 def get_main_menu_keyboard():
@@ -38,7 +50,8 @@ def get_main_menu_keyboard():
         [KeyboardButton("💊 Добавить прием"), KeyboardButton("📅 Сегодня")],
         [KeyboardButton("📊 История"), KeyboardButton("📈 Прогресс")],
         [KeyboardButton("⚙️ Настройки"), KeyboardButton("⏰ Напоминания")],
-        [KeyboardButton("❓ Помощь"), KeyboardButton("📋 Меню")]
+        [KeyboardButton("🧴 Препараты"), KeyboardButton("📋 Меню")],
+        [KeyboardButton("❓ Помощь")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -64,6 +77,40 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def medications_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать список препаратов и выбрать текущий"""
+    user_id = update.effective_user.id
+    current_med_id = get_user_medication(user_id)
+    meds = db.get_medications()
+    
+    if not meds:
+        await update.message.reply_text(
+            "Пока не добавлено ни одного препарата. Введите название нового препарата:",
+        )
+        user_states[user_id] = {"action": "waiting_med_name"}
+        return
+    
+    text = "🧴 Список препаратов:\n\n"
+    keyboard_rows = []
+    for med_id, name, description in meds:
+        mark = "✅" if med_id == current_med_id else "⚪️"
+        text += f"{mark} {name} (ID: {med_id})\n"
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{mark} Выбрать {name}", callback_data=f"med_select_{med_id}"
+                )
+            ]
+        )
+    
+    keyboard_rows.append(
+        [InlineKeyboardButton("➕ Добавить препарат", callback_data="med_add")]
+    )
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_text = (
@@ -71,16 +118,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💊 Добавить прием - Добавить запись о приеме препарата\n"
         "   Бот попросит указать количество таблеток и дозировку\n\n"
         "📅 Сегодня - Показать все приемы за сегодня\n\n"
-        "📊 История - Показать сводку за последние 7 дней\n\n"
+        "📊 История - Показать сводку за последние 7 дней по текущему препарату\n\n"
         "⚙️ Настройки - Настройки курса приема:\n"
         "   - Указать количество таблеток в день\n"
         "   - Указать дозировку таблеток\n"
         "   - Установить даты начала и окончания курса\n\n"
-        "📈 Прогресс - Показать прогресс выполнения курса\n\n"
-        "⏰ Напоминания - Управление напоминаниями:\n"
+        "📈 Прогресс - Показать прогресс выполнения курса по текущему препарату\n\n"
+        "⏰ Напоминания - Управление напоминаниями по текущему препарату:\n"
         "   - Добавить новое напоминание\n"
         "   - Просмотреть список напоминаний\n"
         "   - Удалить напоминание\n\n"
+        "🧴 Препараты - Выбор и добавление препаратов\n"
         "📋 Меню - Показать главное меню с кнопками\n\n"
         "Все команды доступны через кнопки меню или текстовые команды (например, /add)"
     )
@@ -124,8 +172,9 @@ async def handle_dosage(update: Update, context: ContextTypes.DEFAULT_TYPE, dosa
         user_states.pop(user_id, None)
         return
     
-    # Сохранение в базу данных
-    success = db.add_medication(quantity, dosage)
+    # Сохранение в базу данных для текущего препарата
+    medication_id = get_user_medication(user_id)
+    success = db.add_medication(quantity, dosage, medication_id=medication_id)
     
     if success:
         total_dosage = quantity * dosage
@@ -173,11 +222,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "⏰ Напоминания" or text == "/reminder":
             await reminder_menu(update, context)
             return
-        elif text == "❓ Помощь" or text == "/help":
-            await help_command(update, context)
+        elif text == "🧴 Препараты" or text == "/medications":
+            await medications_command(update, context)
             return
         elif text == "📋 Меню" or text == "/menu":
             await menu_command(update, context)
+            return
+        elif text == "❓ Помощь" or text == "/help":
+            await help_command(update, context)
             return
     
     if action == 'waiting_quantity':
@@ -212,7 +264,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise ValueError
             
             time_str = f"{hour:02d}:{minute:02d}"
-            success = db.add_reminder(time_str)
+            medication_id = get_user_medication(user_id)
+            success = db.add_reminder(time_str, medication_id=medication_id)
             
             if success:
                 await update.message.reply_text(
@@ -263,6 +316,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ Пожалуйста, введите число (можно с десятичной точкой). Попробуйте еще раз.")
     
+    elif action == 'waiting_med_name':
+        # Создание нового препарата
+        name = text.strip()
+        if not name:
+            await update.message.reply_text("❌ Название не может быть пустым. Введите название препарата.")
+            return
+        med_id = db.create_medication(name)
+        if not med_id:
+            await update.message.reply_text("❌ Не удалось создать препарат. Попробуйте ещё раз.")
+        else:
+            set_user_medication(user_id, med_id)
+            await update.message.reply_text(
+                f"✅ Препарат создан и выбран: {name}",
+                reply_markup=get_main_menu_keyboard()
+            )
+        user_states.pop(user_id, None)
+
     elif action == 'waiting_start_date':
         try:
             if text.lower() in ['сегодня', 'today', 'now']:
@@ -293,6 +363,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             daily_quantity = user_states[user_id].get('daily_quantity')
             dosage_mg = user_states[user_id].get('dosage_mg')
             start_date = user_states[user_id].get('start_date')
+            medication_id = get_user_medication(user_id)
             
             if text.lower() in ['нет', 'no', 'none', '']:
                 end_date = None
@@ -304,8 +375,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("❌ Дата окончания не может быть раньше даты начала. Попробуйте еще раз.")
                     return
             
-            # Сохраняем настройки курса
-            success = db.set_course_settings(daily_quantity, dosage_mg, start_date, end_date)
+            # Сохраняем настройки курса для текущего препарата
+            success = db.set_course_settings(
+                daily_quantity, dosage_mg, start_date, end_date, medication_id=medication_id
+            )
             
             if success:
                 message = (
@@ -338,7 +411,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать приемы за сегодня"""
-    medications = db.get_today_medications()
+    user_id = update.effective_user.id
+    medication_id = get_user_medication(user_id)
+    medications = db.get_today_medications(medication_id=medication_id)
     
     message = f"📅 Приемы за сегодня ({date.today().strftime('%d.%m.%Y')}):\n\n"
     
@@ -361,7 +436,7 @@ async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"   • Общая дозировка: {total_dosage} мг\n\n"
     
     # Показываем сравнение с планом, если настройки курса установлены
-    settings = db.get_active_course_settings()
+    settings = db.get_active_course_settings(medication_id=medication_id)
     if settings:
         _, daily_quantity, dosage_mg, start_date_str, end_date_str, _ = settings
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
@@ -391,10 +466,14 @@ async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать историю за последние 7 дней"""
-    summary = db.get_medications_summary(days=7)
-    total_stats = db.get_total_statistics()
+    user_id = update.effective_user.id
+    medication_id = get_user_medication(user_id)
+    summary = db.get_medications_summary(days=7, medication_id=medication_id)
+    total_stats = db.get_total_statistics(medication_id=medication_id)
+    medication = db.get_medication(medication_id)
+    med_name = medication[1] if medication else "Препарат"
     
-    message = "📊 История за последние 7 дней:\n\n"
+    message = f"📊 История за последние 7 дней для препарата: {med_name}\n\n"
     
     if not summary:
         message += "❌ За последние 7 дней не было приемов препарата.\n\n"
@@ -407,7 +486,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"   • Общая дозировка: {data['total_dosage_mg']} мг\n\n"
     
     # Добавляем общую статистику
-    message += "📈 Общая статистика за все время:\n"
+    message += "📈 Общая статистика за все время по этому препарату:\n"
     message += f"   • Дней с приемом: {total_stats['total_days']}\n"
     message += f"   • Всего принято таблеток: {total_stats['total_quantity']}\n"
     message += f"   • Общая дозировка: {total_stats['total_dosage_mg']:.1f} мг"
@@ -418,9 +497,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для настройки курса"""
     user_id = update.effective_user.id
+    medication_id = get_user_medication(user_id)
     
-    # Проверяем, есть ли уже активные настройки
-    current_settings = db.get_active_course_settings()
+    # Проверяем, есть ли уже активные настройки для текущего препарата
+    current_settings = db.get_active_course_settings(medication_id=medication_id)
     
     if current_settings:
         _, daily_quantity, dosage_mg, start_date, end_date, _ = current_settings
@@ -446,7 +526,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать прогресс курса"""
-    progress = db.get_course_progress()
+    user_id = update.effective_user.id
+    medication_id = get_user_medication(user_id)
+    progress = db.get_course_progress(medication_id=medication_id)
+    medication = db.get_medication(medication_id)
+    med_name = medication[1] if medication else "Препарат"
     
     if not progress:
         await update.message.reply_text(
@@ -455,7 +539,7 @@ async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    message = "📊 Прогресс курса:\n\n"
+    message = f"📊 Прогресс курса для препарата: {med_name}\n\n"
     message += f"📋 План:\n"
     message += f"• Таблеток в день: {progress['daily_quantity']}\n"
     message += f"• Дозировка одной таблетки: {progress['dosage_mg']} мг\n"
@@ -490,7 +574,9 @@ async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню управления напоминаниями"""
-    reminders = db.get_reminders()
+    user_id = update.effective_user.id
+    medication_id = get_user_medication(user_id)
+    reminders = db.get_reminders(medication_id=medication_id)
     
     keyboard = []
     keyboard.append([InlineKeyboardButton("➕ Добавить напоминание", callback_data="add_reminder")])
@@ -540,6 +626,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💊 Подтверждение приема препарата\n\n"
             "Сколько таблеток вы приняли? (введите число)"
         )
+    
+    elif data == "med_add":
+        # Добавление нового препарата
+        user_states[user_id] = {'action': 'waiting_med_name'}
+        await query.edit_message_text(
+            "🧴 Добавление нового препарата\n\n"
+            "Введите название препарата:"
+        )
+    
+    elif data.startswith("med_select_"):
+        # Выбор текущего препарата
+        try:
+            med_id = int(data.split("_")[2])
+            med = db.get_medication(med_id)
+            if not med:
+                await query.edit_message_text("❌ Препарат не найден.")
+                return
+            set_user_medication(user_id, med_id)
+            await query.edit_message_text(
+                f"✅ Текущий препарат установлен: {med[1]}"
+            )
+        except Exception:
+            await query.edit_message_text("❌ Ошибка при выборе препарата.")
 
 
 async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
@@ -558,7 +667,7 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     else:
         logger.debug(f"Проверка напоминаний. Текущее время: {current_time}, Напоминаний нет")
     
-    for reminder_id, time_str in reminders:
+    for reminder_id, time_str, medication_id in reminders:
         if time_str == current_time:
             logger.info(f"Найдено совпадение! Отправка напоминания на {time_str}")
             stats_file_path = None
@@ -567,7 +676,9 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as tmp_file:
                     stats_file_path = tmp_file.name
                 
-                success = db.generate_statistics_csv(stats_file_path, days=30)
+                success = db.generate_statistics_csv(
+                    stats_file_path, days=30, medication_id=medication_id
+                )
                 
                 if success and os.path.exists(stats_file_path) and os.path.getsize(stats_file_path) > 0:
                     # Проверяем, что файл не пустой (больше чем только заголовки)
@@ -584,10 +695,14 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
                         logger.warning(f"Не удалось отправить файл статистики: {e}")
                 
                 # Формируем сообщение с информацией о плане
-                reminder_text = "⏰ Напоминание: пора принять препарат!\n\n"
+                # Определяем название препарата
+                med = db.get_medication(medication_id)
+                med_name = med[1] if med else "препарат"
+                
+                reminder_text = f"⏰ Напоминание: пора принять {med_name}!\n\n"
                 
                 # Добавляем информацию о плане, если настройки курса установлены
-                settings = db.get_active_course_settings()
+                settings = db.get_active_course_settings(medication_id=medication_id)
                 if settings:
                     _, daily_quantity, dosage_mg, start_date_str, end_date_str, _ = settings
                     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
@@ -596,7 +711,7 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
                     # Проверяем, что сегодня входит в период курса
                     if today >= start_date and (not end_date_str or today <= datetime.strptime(end_date_str, "%Y-%m-%d").date()):
                         # Получаем приемы за сегодня
-                        today_medications = db.get_today_medications()
+                        today_medications = db.get_today_medications(medication_id=medication_id)
                         taken_today = sum(qty for _, qty, _ in today_medications) if today_medications else 0
                         remaining = daily_quantity - taken_today
                         
