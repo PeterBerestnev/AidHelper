@@ -583,7 +583,8 @@ async def reminder_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if reminders:
         message = "⏰ Активные напоминания:\n\n"
-        for reminder_id, time_str in reminders:
+        # reminders: (id, time, medication_id)
+        for reminder_id, time_str, _med_id in reminders:
             message += f"🕐 {time_str} [ID: {reminder_id}]\n"
             keyboard.append([
                 InlineKeyboardButton(f"❌ Удалить {time_str}", callback_data=f"delete_reminder_{reminder_id}")
