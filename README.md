@@ -69,6 +69,7 @@ cp .env.example .env
    - Поддерживаются переменные:
      - `HTTP_PROXY_URL` (например `http://user:pass@host:port`)
      - `HTTPS_PROXY_URL` (если не задано, берется `HTTP_PROXY_URL`)
+     - `ALL_PROXY_URL` (например `socks5://user:pass@host:port` — если прокси задаётся универсально)
      - или общий `PROXY_URL` (то же самое для обоих протоколов)
      - `NO_PROXY` (например `api.telegram.org,localhost`)
 

@@ -1,10 +1,12 @@
 import os
 import logging
 import tempfile
+import time
 from datetime import datetime, date, timedelta
 from typing import List
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.error import TimedOut, NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,10 +28,13 @@ def apply_proxy_from_env() -> None:
     Ожидаемые переменные (задаются в `.env`):
     - `HTTP_PROXY_URL` (или общий `PROXY_URL`)
     - `HTTPS_PROXY_URL` (если не задан — берется `HTTP_PROXY_URL`)
+    - `ALL_PROXY_URL` (если задан, используется напрямую)
+    - `PROXY_URL` (используется как подстановка для `ALL_PROXY`, если `ALL_PROXY_URL` не задан)
     - `NO_PROXY` (опционально)
     """
     http_proxy = os.getenv("HTTP_PROXY_URL") or os.getenv("PROXY_URL")
     https_proxy = os.getenv("HTTPS_PROXY_URL") or http_proxy
+    all_proxy = os.getenv("ALL_PROXY_URL")
     no_proxy = os.getenv("NO_PROXY")
 
     if http_proxy:
@@ -38,6 +43,13 @@ def apply_proxy_from_env() -> None:
         os.environ["HTTPS_PROXY"] = https_proxy
     if no_proxy:
         os.environ["NO_PROXY"] = no_proxy
+
+    # Подтягиваем ALL_PROXY из env (часто используется для socks/универсальных прокси).
+    # Приоритет: ALL_PROXY_URL > (PROXY_URL, если ALL_PROXY не задан).
+    if all_proxy:
+        os.environ["ALL_PROXY"] = all_proxy
+    elif os.getenv("PROXY_URL") and not os.getenv("ALL_PROXY"):
+        os.environ["ALL_PROXY"] = os.getenv("PROXY_URL")
 
     if http_proxy or https_proxy:
         # Не выводим полный URL (там могут быть логин/пароль)
@@ -782,39 +794,53 @@ def main():
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN не установлен в .env файле")
         return
-    
-    # Создание приложения
-    application = Application.builder().token(token).build()
-    
-    # Регистрация обработчиков
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("add", add_medication))
-    application.add_handler(CommandHandler("today", show_today))
-    application.add_handler(CommandHandler("history", show_history))
-    application.add_handler(CommandHandler("settings", settings_command))
-    application.add_handler(CommandHandler("progress", progress_command))
-    application.add_handler(CommandHandler("reminder", reminder_menu))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Настройка периодической проверки напоминаний
-    job_queue = application.job_queue
-    if job_queue:
-        job_queue.run_repeating(
-            send_reminder,
-            interval=60,  # Проверка каждую минуту
-            first=10
-        )
-        logger.info("✅ Периодическая проверка напоминаний настроена (каждую минуту)")
-    else:
-        logger.error("❌ Job queue недоступен! Напоминания не будут работать!")
-    
-    # Запуск бота
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logger.info(f"Бот запущен... Текущее время: {current_time}")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # При проблемах с сетью/прокси Telegram может не отвечать на старте.
+    # Чтобы контейнер не падал и не уходил в перезапуски, делаем retry.
+    retry_delay_seconds = 30
+    while True:
+        try:
+            # Создание приложения (на каждую попытку)
+            application = Application.builder().token(token).build()
+            
+            # Регистрация обработчиков
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("menu", menu_command))
+            application.add_handler(CommandHandler("help", help_command))
+            application.add_handler(CommandHandler("add", add_medication))
+            application.add_handler(CommandHandler("today", show_today))
+            application.add_handler(CommandHandler("history", show_history))
+            application.add_handler(CommandHandler("settings", settings_command))
+            application.add_handler(CommandHandler("progress", progress_command))
+            application.add_handler(CommandHandler("reminder", reminder_menu))
+            application.add_handler(CallbackQueryHandler(button_callback))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            
+            # Настройка периодической проверки напоминаний
+            job_queue = application.job_queue
+            if job_queue:
+                job_queue.run_repeating(
+                    send_reminder,
+                    interval=60,  # Проверка каждую минуту
+                    first=10
+                )
+                logger.info("✅ Периодическая проверка напоминаний настроена (каждую минуту)")
+            else:
+                logger.error("❌ Job queue недоступен! Напоминания не будут работать!")
+            
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.info(f"Бот запущен... Текущее время: {current_time}")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
+            # Если run_polling вернулся без исключения — завершаем цикл
+            break
+        except (TimedOut, NetworkError) as e:
+            logger.error(f"Telegram недоступен (timeout/network): {e}. Повтор через {retry_delay_seconds} сек...")
+            time.sleep(retry_delay_seconds)
+        except Exception:
+            # Не скрываем остальные ошибки, чтобы их было видно
+            logger.exception("Непредвиденная ошибка при запуске бота.")
+            raise
 
 
 if __name__ == "__main__":
