@@ -18,6 +18,10 @@ ENV/
 *.sqlite3
 data/
 
+# Logs
+logs/
+*.log
+
 # IDE
 .vscode/
 .idea/

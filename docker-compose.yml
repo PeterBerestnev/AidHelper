@@ -10,5 +10,7 @@ services:
     volumes:
       # Монтируем директорию с данными для сохранения базы данных
       - ./data:/app/data
+      # Монтируем директорию с логами, чтобы они сохранялись в проекте на хосте
+      - ./logs:/app/logs
     environment:
       - DB_PATH=/app/data/medication.db

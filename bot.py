@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import time
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, date, timedelta
 from typing import List
 from dotenv import load_dotenv
@@ -19,6 +20,40 @@ from database import Database
 
 # Загрузка переменных окружения
 load_dotenv()
+
+
+# Настройка логирования: вывод в консоль + запись в файл в директории проекта.
+# В docker-compose директория `./logs` монтируется в контейнер как `/app/logs`.
+LOG_DIR = os.getenv("LOG_DIR", "./logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(LOG_LEVEL)
+for _h in list(_root_logger.handlers):
+    _root_logger.removeHandler(_h)
+
+_log_format = logging.Formatter(
+    fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+_file_handler = RotatingFileHandler(
+    filename=os.path.join(LOG_DIR, "bot.log"),
+    maxBytes=5 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setLevel(LOG_LEVEL)
+_file_handler.setFormatter(_log_format)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(LOG_LEVEL)
+_console_handler.setFormatter(_log_format)
+
+_root_logger.addHandler(_file_handler)
+_root_logger.addHandler(_console_handler)
+
+logger = logging.getLogger(__name__)
 
 
 def apply_proxy_from_env() -> None:
