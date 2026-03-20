@@ -64,6 +64,14 @@ cp .env.example .env
    USER_ID=123456789
    ```
 
+   **Прокси (опционально):**
+   - Если соединение с `api.telegram.org` идет через прокси, укажите параметры в `.env`.
+   - Поддерживаются переменные:
+     - `HTTP_PROXY_URL` (например `http://user:pass@host:port`)
+     - `HTTPS_PROXY_URL` (если не задано, берется `HTTP_PROXY_URL`)
+     - или общий `PROXY_URL` (то же самое для обоих протоколов)
+     - `NO_PROXY` (например `api.telegram.org,localhost`)
+
 4. Запустите бота с помощью Makefile:
 ```bash
 make build    # Собрать Docker образ

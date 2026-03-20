@@ -18,6 +18,34 @@ from database import Database
 # Загрузка переменных окружения
 load_dotenv()
 
+
+def apply_proxy_from_env() -> None:
+    """
+    Настраивает переменные окружения для httpx (PTB использует httpx под капотом).
+
+    Ожидаемые переменные (задаются в `.env`):
+    - `HTTP_PROXY_URL` (или общий `PROXY_URL`)
+    - `HTTPS_PROXY_URL` (если не задан — берется `HTTP_PROXY_URL`)
+    - `NO_PROXY` (опционально)
+    """
+    http_proxy = os.getenv("HTTP_PROXY_URL") or os.getenv("PROXY_URL")
+    https_proxy = os.getenv("HTTPS_PROXY_URL") or http_proxy
+    no_proxy = os.getenv("NO_PROXY")
+
+    if http_proxy:
+        os.environ["HTTP_PROXY"] = http_proxy
+    if https_proxy:
+        os.environ["HTTPS_PROXY"] = https_proxy
+    if no_proxy:
+        os.environ["NO_PROXY"] = no_proxy
+
+    if http_proxy or https_proxy:
+        # Не выводим полный URL (там могут быть логин/пароль)
+        logger.info("Proxy configured for outbound requests (via env vars).")
+
+
+apply_proxy_from_env()
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
